@@ -15,6 +15,11 @@
  *
  */
 
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <time.h>
+#include <string.h>
+
 #include "hpdf_conf.h"
 #include "hpdf_utils.h"
 #include "hpdf_consts.h"
@@ -120,6 +125,7 @@ HPDF_NameTree_Add  (HPDF_NameTree  tree,
 {
     HPDF_Array items;
     HPDF_INT32 i, icount;
+    HPDF_STATUS ret = HPDF_OK;
 
     if (!tree || !name)
         return HPDF_INVALID_PARAMETER;
@@ -129,39 +135,26 @@ HPDF_NameTree_Add  (HPDF_NameTree  tree,
         return HPDF_INVALID_OBJECT;
 
     /* "The keys shall be sorted in lexical order" -- 7.9.6, Name Trees.
-     * Since we store keys sorted, it's best to do a linear insertion sort
+     * Since we store keys sorted,
      * Find the first element larger than 'key', and insert 'key' and then
      * 'obj' into the items. */
 
     icount = HPDF_Array_Items(items);
 
-    /* If we're larger than the last element, append */
-    if (icount) {
-        HPDF_String last = HPDF_Array_GetItem(items, icount - 2, HPDF_OCLASS_STRING);
+    for( i=0; i<icount; i+=2 ) {
+    	HPDF_String elem = HPDF_Array_GetItem(items, i, HPDF_OCLASS_STRING);
 
-        if (HPDF_String_Cmp(name, last) > 0) {
-            HPDF_Array_Add(items, name);
-            HPDF_Array_Add(items, obj);
-            return HPDF_OK;
-        }
+    	if( HPDF_String_Cmp(name, elem) < 0 ) {
+    		ret += HPDF_Array_Insert(items, elem, name);
+    		ret += HPDF_Array_Insert(items, elem, obj);
+    		return ret;
+    	}
     }
 
-    /* Walk backwards through the list until we're smaller than an element=
-     * That's the element to insert in front of. */
-    for (i = icount - 4; i >= 0; i -= 2) {
-        HPDF_String elem = HPDF_Array_GetItem(items, i, HPDF_OCLASS_STRING);
-
-        if (i == 0 || HPDF_String_Cmp(name, elem) < 0) {
-            HPDF_Array_Insert(items, elem, name);
-            HPDF_Array_Insert(items, elem, obj);
-            return HPDF_OK;
-        }
-    }
-
-    /* Items list is empty */
-    HPDF_Array_Add(items, name);
-    HPDF_Array_Add(items, obj);
-    return HPDF_OK;
+    /* Items list is empty or we're past the end */
+    ret += HPDF_Array_Add(items, name);
+    ret += HPDF_Array_Add(items, obj);
+    return ret;
 }
 
 HPDF_BOOL
@@ -193,6 +186,39 @@ HPDF_EmbeddedFile_New  (HPDF_MMgr  mmgr,
     HPDF_Dict eff;              /* ef has an /EF <<blah>> key - this is it */
     HPDF_Dict filestream;       /* the stream that /EF <</F _ _ R>> refers to */
     HPDF_Stream stream;
+    HPDF_Dict params;
+    HPDF_UINT32 fstream_size;
+    HPDF_String moddate;
+    struct stat fstatbuf;
+    char tmstr[128] = "                       ";
+    const char *flname;
+    int res;
+    time_t tmsec;
+    long tmzone;
+    struct tm *tmstrct, *gmtstrct;
+
+#if defined(__MSDOS__) || defined(_WIN32)
+    flname = strrchr( file, '\\');
+#else
+    flname = strrchr( file, '/');
+#endif
+    if( flname == NULL ) {
+    	flname = file;
+    } else {
+    	flname++;
+    }
+
+    res = stat( file, &fstatbuf);
+    if( res == 0 ){
+	    fstream_size = fstatbuf.st_size;
+	    tmsec = fstatbuf.st_mtime;
+	    tmstrct = localtime(&tmsec);
+	    gmtstrct = gmtime(&tmsec);
+	    tmzone = difftime( mktime(tmstrct), mktime(gmtstrct) );
+	    sprintf( tmstr, "D:%4d%02d%02d%02d%02d%02d%+03d\'%02d\'", (tmstrct->tm_year + 1900), (tmstrct->tm_mon + 1), \
+	    		tmstrct->tm_mday, tmstrct->tm_hour, tmstrct->tm_min, tmstrct->tm_sec, (int)(tmzone / 3600), (int)((tmzone % 3600) / 60) );
+	    moddate = HPDF_String_New (mmgr, tmstr, NULL);
+    }
 
     ef = HPDF_Dict_New (mmgr);
     if (!ef)
@@ -214,14 +240,23 @@ HPDF_EmbeddedFile_New  (HPDF_MMgr  mmgr,
     if (!eff)
         return NULL;
 
-    name = HPDF_String_New (mmgr, file, NULL);
+    name = HPDF_String_New (mmgr, flname, NULL);
     if (!name)
         return NULL;
 
-    ret += HPDF_Dict_AddName (ef, "Type", "F");
+    params = HPDF_Dict_New (mmgr);
+    if (!params)
+    	return NULL;
+
+    ret += HPDF_Dict_AddName (ef, "Type", "Filespec");
     ret += HPDF_Dict_Add (ef, "F", name);
     ret += HPDF_Dict_Add (ef, "EF", eff);
+
     ret += HPDF_Dict_Add (eff, "F", filestream);
+    ret += HPDF_Dict_AddName (filestream, "Type", "EmbeddedFile");
+    ret += HPDF_Dict_Add (filestream, "Params", params);
+    ret += HPDF_Dict_AddNumber (params, "Size", fstream_size);
+    ret += HPDF_Dict_Add (params, "ModDate", moddate);
 
     if (ret != HPDF_OK)
         return NULL;

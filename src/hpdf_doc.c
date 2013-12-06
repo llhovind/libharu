@@ -15,6 +15,7 @@
  *
  */
 
+#include <string.h>
 
 #include "hpdf_conf.h"
 #include "hpdf_utils.h"
@@ -1930,6 +1931,7 @@ HPDF_AttachFile  (HPDF_Doc    pdf,
     HPDF_EmbeddedFile efile;
     HPDF_String name;
     HPDF_STATUS ret = HPDF_OK;
+    const char *flname;
 
     HPDF_PTRACE ((" HPDF_AttachFile\n"));
 
@@ -1962,7 +1964,20 @@ HPDF_AttachFile  (HPDF_Doc    pdf,
     if (!efile)
         return NULL;
 
-    name = HPDF_String_New (pdf->mmgr, file, NULL);
+    /*
+     * extract the file name from the full path to prevent dir structure info leak
+     */
+#if defined(__MSDOS__) || defined(_WIN32)
+    flname = strrchr( file, '\\');
+#else
+    flname = strrchr( file, '/');
+#endif
+    if( flname == NULL ) {
+    	flname = file;
+    } else {
+    	flname++;
+    }
+    name = HPDF_String_New (pdf->mmgr, flname, NULL);
     if (!name)
         return NULL;
 
